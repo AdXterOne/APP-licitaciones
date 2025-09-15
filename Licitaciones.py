@@ -425,6 +425,210 @@ def evaluar_licitacion_medica(fila, inventario_df):
         resultado['estado'] = 'amarillo'
         resultado['observaciones'].append("Sin descripción de productos médicos")
         return resultado
+
+def obtener_requerimientos_documentales_medicos(nombre_licitacion, requerimientos_df):
+    """Obtiene los documentos requeridos para una licitación médica específica"""
+    if requerimientos_df is None or requerimientos_df.empty:
+        return []
+    
+    nombre_normalizado = normalizar_texto_completo(nombre_licitacion)
+    requerimientos_encontrados = []
+    
+    for _, fila in requerimientos_df.iterrows():
+        nombre_req = ""
+        for col in ['nombre', 'licitacion', 'proyecto', 'titulo']:
+            if col in fila and pd.notna(fila[col]):
+                nombre_req = str(fila[col])
+                break
+        
+        if not nombre_req:
+            continue
+        
+        nombre_req_normalizado = normalizar_texto_completo(nombre_req)
+        
+        if (nombre_normalizado in nombre_req_normalizado or 
+            nombre_req_normalizado in nombre_normalizado or
+            calcular_similitud_nombres(nombre_normalizado, nombre_req_normalizado) > 0.6):
+            
+            documentos = extraer_documentos_requeridos_medicos(fila)
+            if documentos:
+                requerimientos_encontrados.extend(documentos)
+    
+    return requerimientos_encontrados
+
+def calcular_similitud_nombres(nombre1, nombre2):
+    """Calcula similitud entre nombres considerando términos médicos"""
+    if not nombre1 or not nombre2:
+        return 0
+    
+    palabras1 = set(nombre1.split())
+    palabras2 = set(nombre2.split())
+    
+    if not palabras1 or not palabras2:
+        return 0
+    
+    # Dar mayor peso a términos médicos específicos
+    terminos_medicos = {
+        'medicamentos', 'farmacia', 'hospital', 'clinica', 'salud',
+        'medico', 'quirurgico', 'laboratorio', 'reactivos'
+    }
+    
+    interseccion = len(palabras1.intersection(palabras2))
+    union = len(palabras1.union(palabras2))
+    
+    # Bonus por términos médicos comunes
+    terminos_medicos_comunes = palabras1.intersection(palabras2).intersection(terminos_medicos)
+    if terminos_medicos_comunes:
+        interseccion += len(terminos_medicos_comunes) * 0.5
+    
+    return interseccion / union if union > 0 else 0
+
+def extraer_documentos_requeridos_medicos(fila):
+    """Extrae documentos requeridos específicos para licitaciones médicas"""
+    documentos = []
+    
+    columnas_documentos = [
+        'documentos', 'requerimientos', 'requisitos', 'archivos', 
+        'documentacion', 'docs', 'anexos', 'expediente'
+    ]
+    
+    texto_documentos = ""
+    for col in columnas_documentos:
+        if col in fila and pd.notna(fila[col]):
+            texto_documentos += str(fila[col]) + " "
+    
+    if not texto_documentos.strip():
+        return documentos
+    
+    texto_normalizado = normalizar_texto_completo(texto_documentos)
+    
+    # Documentos específicos para licitaciones médicas y farmacéuticas
+    documentos_medicos = [
+        # Documentos regulatorios médicos
+        'licencia sanitaria', 'permiso sanitario', 'aviso funcionamiento',
+        'registro sanitario', 'cofepris', 'invima', 'fda',
+        'buenas practicas manufactura', 'certificado gmp', 'iso 13485',
+        'farmacovigilancia', 'tecnovigilancia',
+        
+        # Documentos específicos de medicamentos
+        'registro medicamento', 'ficha tecnica', 'monografia',
+        'certificado analisis', 'certificado calidad',
+        'cadena custodia', 'cadena frio',
+        
+        # Personal especializado
+        'quimico farmacobiologo', 'director tecnico',
+        'responsable sanitario', 'profesional salud',
+        'cedula profesional',
+        
+        # Documentos generales básicos
+        'acta constitutiva', 'cedula rfc', 'poder notarial',
+        'estados financieros', 'declaracion anual',
+        'constancia situacion fiscal', 'opinion cumplimiento',
+        'propuesta tecnica', 'propuesta economica'
+    ]
+    
+    # Buscar documentos específicos médicos
+    for doc in documentos_medicos:
+        if doc in texto_normalizado:
+            doc_formateado = doc.replace('_', ' ').title()
+            if doc_formateado not in [d['nombre'] for d in documentos]:
+                documentos.append({
+                    'nombre': doc_formateado,
+                    'tipo': clasificar_tipo_documento_medico(doc),
+                    'obligatorio': determinar_obligatoriedad_medica(texto_normalizado, doc),
+                    'sector': 'Salud' if 'sanitaria' in doc or 'medico' in doc or 'farmaco' in doc else 'General'
+                })
+    
+    return documentos
+
+def clasificar_tipo_documento_medico(documento):
+    """Clasifica documentos considerando especificidades médicas"""
+    doc_lower = documento.lower()
+    
+    if any(x in doc_lower for x in ['sanitaria', 'sanitario', 'cofepris', 'invima', 'fda', 'registro medicamento']):
+        return 'Regulatorio Médico'
+    elif any(x in doc_lower for x in ['gmp', 'iso 13485', 'buenas practicas', 'farmacovigilancia']):
+        return 'Calidad Médica'
+    elif any(x in doc_lower for x in ['farmacobiologo', 'director tecnico', 'responsable sanitario']):
+        return 'Personal Especializado'
+    elif any(x in doc_lower for x in ['acta', 'cedula', 'rfc', 'poder']):
+        return 'Legal'
+    elif any(x in doc_lower for x in ['financiero', 'estados', 'declaracion']):
+        return 'Financiero'
+    elif any(x in doc_lower for x in ['propuesta', 'tecnica', 'economica']):
+        return 'Propuesta'
+    else:
+        return 'General'
+
+def determinar_obligatoriedad_medica(texto, documento):
+    """Determina obligatoriedad considerando regulaciones médicas"""
+    # Documentos críticos siempre obligatorios en sector salud
+    criticos_salud = [
+        'licencia sanitaria', 'registro sanitario', 'cofepris',
+        'buenas practicas', 'responsable sanitario'
+    ]
+    
+    if any(critico in documento for critico in criticos_salud):
+        return True
+    
+    # Evaluar contexto general
+    pos = texto.find(documento)
+    if pos == -1:
+        return True
+    
+    contexto = texto[max(0, pos-50):pos+len(documento)+50]
+    
+    palabras_obligatorio = ['obligatorio', 'requerido', 'indispensable', 'necesario', 'debe']
+    palabras_opcional = ['opcional', 'deseable', 'preferible', 'conveniente']
+    
+    if any(palabra in contexto for palabra in palabras_opcional):
+        return False
+    
+    return True
+
+def evaluar_licitacion_medica_completa(fila, inventario_df, requerimientos_df=None):
+    """Evalúa una licitación médica completa incluyendo productos y requerimientos especializados"""
+    # Evaluación médica de productos
+    resultado = evaluar_licitacion_medica(fila, inventario_df)
+    
+    # Agregar evaluación de requerimientos documentales médicos
+    if requerimientos_df is not None and not requerimientos_df.empty:
+        nombre_licitacion = ""
+        for col in ['nombre', 'titulo', 'licitacion', 'descripcion']:
+            if col in fila and pd.notna(fila[col]):
+                nombre_licitacion = str(fila[col])
+                break
+        
+        if nombre_licitacion:
+            documentos_requeridos = obtener_requerimientos_documentales_medicos(nombre_licitacion, requerimientos_df)
+            resultado['documentos_requeridos'] = documentos_requeridos
+            resultado['total_documentos'] = len(documentos_requeridos)
+            
+            # Clasificar documentos por tipo médico
+            tipos_docs = {}
+            for doc in documentos_requeridos:
+                tipo = doc['tipo']
+                if tipo not in tipos_docs:
+                    tipos_docs[tipo] = []
+                tipos_docs[tipo].append(doc)
+            resultado['documentos_por_tipo'] = tipos_docs
+            
+            # Contar documentos críticos médicos
+            docs_criticos = sum(1 for doc in documentos_requeridos 
+                              if doc['tipo'] in ['Regulatorio Médico', 'Calidad Médica', 'Personal Especializado'])
+            resultado['documentos_criticos_medicos'] = docs_criticos
+        else:
+            resultado['documentos_requeridos'] = []
+            resultado['total_documentos'] = 0
+            resultado['documentos_por_tipo'] = {}
+            resultado['documentos_criticos_medicos'] = 0
+    else:
+        resultado['documentos_requeridos'] = []
+        resultado['total_documentos'] = 0
+        resultado['documentos_por_tipo'] = {}
+        resultado['documentos_criticos_medicos'] = 0
+    
+    return resultado
     
     # Extraer productos usando función médica especializada
     productos_requeridos = obtener_productos_de_descripcion(texto_productos)
@@ -588,9 +792,19 @@ with st.sidebar:
         help="Inventario de medicamentos, dispositivos médicos y equipos hospitalarios"
     )
     
+    archivo_requerimientos = st.file_uploader(
+        "Archivo de Requerimientos Documentales (Opcional)",
+        type=['csv', 'xlsx', 'xls'],
+        help="Documentos regulatorios y certificaciones requeridas para cada licitación médica"
+    )
+    
     archivos_cargados = sum([bool(archivo_licitaciones), bool(archivo_inventario)])
-    if archivo_licitaciones and archivo_inventario:
+    if archivo_requerimientos:
+        archivos_cargados += 1
+        st.success("✅ Archivos médicos cargados correctamente (incluyendo requerimientos)")
+    elif archivo_licitaciones and archivo_inventario:
         st.success("✅ Archivos médicos básicos cargados")
+        st.info("💡 Opcionalmente puedes cargar requerimientos documentales")
     
     st.markdown("---")
     st.markdown("### 🔧 Configuración")
@@ -623,8 +837,373 @@ try:
     inventario_df = inventario_df.dropna(how='all')
     
     st.success(f"Datos médicos cargados: {len(licitaciones_df)} licitaciones médicas, {len(inventario_df)} productos en inventario hospitalario")
-
+        
 except Exception as e:
     st.error(f"Error al cargar archivos médicos: {str(e)}")
     st.info("Verifica que los archivos tengan formato correcto y contengan datos médicos válidos.")
     st.stop()
+
+# Debug especializado para productos médicos
+if mostrar_debug:
+    with st.expander("Debug - Análisis de Vocabulario Médico"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Columnas en Licitaciones Médicas:**")
+            st.write(list(licitaciones_df.columns))
+            st.write("**Muestra de licitaciones:**")
+            st.dataframe(licitaciones_df.head(2))
+            
+            # Debug de extracción de productos médicos
+            st.write("**Extracción de productos médicos:**")
+            for idx, fila in licitaciones_df.head(2).iterrows():
+                nombre_lic = fila.get('nombre', f'Licitación {idx+1}')
+                descripcion = fila.get('descripcion', 'Sin descripción')
+                
+                st.write(f"**{nombre_lic}:**")
+                st.write(f"*Descripción:* {descripcion[:100]}...")
+                
+                productos = obtener_productos_de_descripcion(descripcion)
+                if productos:
+                    for prod in productos:
+                        categoria_med = prod.get('categoria_medica', 'N/A')
+                        st.write(f"  ✅ {prod['nombre']}: {prod['cantidad']} {prod['unidad']} - Categoría: {categoria_med}")
+                else:
+                    st.write("  ❌ No se extrajeron productos médicos")
+        
+        with col2:
+            st.write("**Columnas en Inventario Médico:**")
+            st.write(list(inventario_df.columns))
+            st.write("**Muestra de inventario:**")
+            st.dataframe(inventario_df.head(2))
+            
+            # Debug de búsqueda médica
+            st.write("**Búsqueda en inventario médico:**")
+            productos_test_medicos = ['paracetamol', 'gasas', 'jeringas', 'alcohol', 'microscopio', 'suero_fisiologico']
+            
+            for prod_name in productos_test_medicos:
+                producto_test = {'nombre': prod_name, 'cantidad': 10, 'unidad': 'unidad'}
+                resultado = buscar_en_inventario_medico(producto_test, inventario_df)
+                
+                if resultado['encontrado']:
+                    caducidad_info = f" - Caduca: {resultado.get('caducidad', 'N/A')}" if resultado.get('caducidad') else ""
+                    lote_info = f" - Lote: {resultado.get('lote', 'N/A')}" if resultado.get('lote') else ""
+                    st.write(f"✅ {prod_name}: {resultado['producto_match'][:30]}...{caducidad_info}{lote_info}")
+                else:
+                    st.write(f"❌ {prod_name}: No encontrado en inventario")
+
+# Procesamiento principal
+if st.button("Analizar Licitaciones Médicas", type="primary"):
+    with st.spinner("Procesando análisis médico especializado..."):
+        resultados = []
+        evaluaciones_detalladas = []
+        alertas_criticas = []
+        
+        for idx, fila in licitaciones_df.iterrows():
+            evaluacion = evaluar_licitacion_medica_completa(fila, inventario_df, requerimientos_df)
+            evaluaciones_detalladas.append(evaluacion)
+            
+            # Obtener nombre de licitación
+            nombre_licitacion = "Sin nombre"
+            for col in ['nombre', 'titulo', 'licitacion', 'descripcion']:
+                if col in fila and pd.notna(fila[col]):
+                    nombre_licitacion = str(fila[col])[:50] + ("..." if len(str(fila[col])) > 50 else "")
+                    break
+            
+            # Determinar criticidad específica para sector médico
+            estado_critico = evaluacion['estado']
+            if evaluacion.get('alertas_caducidad'):
+                caducados = [a for a in evaluacion['alertas_caducidad'] if a['estado_caducidad'] == 'caducado']
+                if caducados:
+                    estado_critico = 'crítico'
+                    alertas_criticas.append({
+                        'licitacion': nombre_licitacion,
+                        'tipo': 'medicamento_caducado',
+                        'detalle': caducados
+                    })
+            
+            # Contar productos por categoría médica
+            categorias_productos = evaluacion.get('productos_por_categoria', {})
+            
+            resultado = {
+                'ID': idx + 1,
+                'Licitación': nombre_licitacion,
+                'Estado': estado_critico,
+                'Productos_Analizados': evaluacion['productos_analizados'],
+                'Productos_OK': evaluacion['productos_con_stock'],
+                'Sin_Inventario': len(evaluacion.get('productos_sin_inventario', [])),
+                'Stock_Insuficiente': len(evaluacion.get('productos_stock_insuficiente', [])),
+                'Alertas_Caducidad': len(evaluacion.get('alertas_caducidad', [])),
+                'Documentos_Regulatorios': evaluacion.get('documentos_criticos_medicos', 0),
+                'Total_Documentos': evaluacion.get('total_documentos', 0),
+                'Categorías_Médicas': len(categorias_productos),
+                'Observaciones': ' | '.join(evaluacion['observaciones'])
+            }
+            
+            resultados.append(resultado)
+        
+        # Crear DataFrame de resultados médicos
+        if resultados:
+            resultados_df = pd.DataFrame(resultados)
+            
+            # Métricas generales para sector médico
+            total = len(resultados_df)
+            verdes = len(resultados_df[resultados_df['Estado'] == 'verde'])
+            amarillos = len(resultados_df[resultados_df['Estado'] == 'amarillo'])
+            rojos = len(resultados_df[resultados_df['Estado'] == 'rojo'])
+            criticos = len(resultados_df[resultados_df['Estado'] == 'crítico'])
+            
+            # Alertas críticas para medicamentos
+            total_alertas_caducidad = resultados_df['Alertas_Caducidad'].sum()
+            
+            # Mostrar métricas médicas principales
+            st.markdown("### Resumen Ejecutivo - Sector Médico")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Total", total)
+            col2.metric("Aptas", verdes, f"{verdes/total*100:.1f}%" if total > 0 else "0%")
+            col3.metric("Revisar", amarillos, f"{amarillos/total*100:.1f}%" if total > 0 else "0%")
+            col4.metric("No aptas", rojos, f"{rojos/total*100:.1f}%" if total > 0 else "0%")
+            col5.metric("Críticas", criticos + total_alertas_caducidad, "Caducidad/Stock")
+            
+            # Alertas críticas especiales para medicamentos
+            if alertas_criticas:
+                st.error(f"ALERTA CRÍTICA: {len(alertas_criticas)} licitaciones con medicamentos caducados")
+                for alerta in alertas_criticas[:3]:
+                    st.error(f"• **{alerta['licitacion']}**: Medicamentos caducados detectados")
+            
+            # Mostrar alertas de caducidad si están habilitadas
+            if mostrar_caducidades and total_alertas_caducidad > 0:
+                st.warning(f"ALERTAS DE CADUCIDAD: {total_alertas_caducidad} productos próximos a caducar o caducados")
+            
+            # Tabla de resultados médicos con colores
+            st.subheader("Resultados por Licitación Médica")
+            
+            resultados_display = resultados_df.copy()
+            resultados_display['Estado_Visual'] = resultados_display['Estado'].map({
+                'verde': 'APTA',
+                'amarillo': 'REVISAR',
+                'rojo': 'NO APTA',
+                'crítico': 'CRÍTICA'
+            })
+            
+            # Reordenar columnas para vista médica
+            if requerimientos_df is not None:
+                columnas_orden = ['ID', 'Licitación', 'Estado_Visual', 'Productos_Analizados', 
+                                'Productos_OK', 'Sin_Inventario', 'Stock_Insuficiente', 
+                                'Alertas_Caducidad', 'Documentos_Regulatorios', 'Total_Documentos',
+                                'Categorías_Médicas', 'Observaciones']
+            else:
+                columnas_orden = ['ID', 'Licitación', 'Estado_Visual', 'Productos_Analizados', 
+                                'Productos_OK', 'Sin_Inventario', 'Stock_Insuficiente', 
+                                'Alertas_Caducidad', 'Categorías_Médicas', 'Observaciones']
+            
+            st.dataframe(resultados_display[columnas_orden], use_container_width=True)
+            
+            # Análisis detallado por licitación médica
+            if mostrar_detalles:
+                st.subheader("Análisis Detallado por Licitación Médica")
+                
+                for idx, evaluacion in enumerate(evaluaciones_detalladas):
+                    nombre_licitacion = resultados[idx]['Licitación']
+                    estado = evaluacion['estado'].upper()
+                    
+                    # Determinar emoji del estado
+                    emoji_estado = "🚨" if estado == "CRÍTICO" else ("🔴" if estado == "ROJO" else ("🟡" if estado == "AMARILLO" else "🟢"))
+                    
+                    with st.expander(f"{emoji_estado} Licitación {idx + 1}: {nombre_licitacion} - Estado: {estado}"):
+                        
+                        # ALERTAS CRÍTICAS DE CADUCIDAD (prioritario para medicamentos)
+                        if evaluacion.get('alertas_caducidad'):
+                            st.markdown("#### ALERTAS CRÍTICAS DE CADUCIDAD:")
+                            for alerta in evaluacion['alertas_caducidad']:
+                                if alerta['estado_caducidad'] == 'caducado':
+                                    st.error(f"**{alerta['producto']}** - MEDICAMENTO CADUCADO - Venció hace {abs(alerta['dias_restantes'])} días")
+                                    st.write("  ACCIÓN INMEDIATA: Retirar del inventario y gestionar disposición")
+                                elif alerta['estado_caducidad'] == 'proximo_caducar':
+                                    st.warning(f"**{alerta['producto']}** - CADUCA EN {alerta['dias_restantes']} DÍAS")
+                                    st.write("  ACCIÓN: Priorizar uso o evaluar reposición")
+                            st.markdown("---")
+                        
+                        # Productos que NO existen en inventario médico
+                        if evaluacion['productos_sin_inventario']:
+                            st.markdown("#### PRODUCTOS MÉDICOS NO DISPONIBLES:")
+                            for producto in evaluacion['productos_sin_inventario']:
+                                st.error(f"**{producto['nombre']}** - Cantidad: **{producto['cantidad_requerida']} {producto['unidad']}** - Categoría: *{producto['categoria']}*")
+                                st.write("  Acción: Buscar proveedor especializado en productos médicos")
+                            st.markdown("---")
+                        
+                        # Productos con stock insuficiente  
+                        if evaluacion['productos_stock_insuficiente']:
+                            st.markdown("#### PRODUCTOS CON STOCK INSUFICIENTE:")
+                            for producto in evaluacion['productos_stock_insuficiente']:
+                                porcentaje_cobertura = (producto['disponible'] / producto['requerido']) * 100
+                                caducidad_texto = f" - Caduca: {producto['caducidad']}" if producto.get('caducidad') else ""
+                                lote_texto = f" - Lote: {producto['lote']}" if producto.get('lote') else ""
+                                
+                                st.warning(
+                                    f"**{producto['nombre']}** *(Inventario: {producto['producto_inventario']})*\n\n"
+                                    f"• **Requiere:** {producto['requerido']} {producto['unidad']}\n\n"
+                                    f"• **Disponible:** {producto['disponible']} {producto['unidad']}\n\n"
+                                    f"• **FALTAN:** {producto['falta']} {producto['unidad']}\n\n"
+                                    f"• **Cobertura:** {porcentaje_cobertura:.1f}%\n\n"
+                                    f"• **Categoría:** {producto['categoria']}{caducidad_texto}{lote_texto}"
+                                )
+                                st.write("  Acción: Conseguir stock adicional o revisar especificaciones médicas")
+                            st.markdown("---")
+                        
+                        # Productos completamente disponibles
+                        if evaluacion['productos_disponibles']:
+                            st.markdown("#### PRODUCTOS MÉDICOS DISPONIBLES:")
+                            for producto in evaluacion['productos_disponibles']:
+                                caducidad_texto = f" - Caduca: {producto['caducidad']}" if producto.get('caducidad') else ""
+                                lote_texto = f" - Lote: {producto['lote']}" if producto.get('lote') else ""
+                                
+                                st.success(
+                                    f"**{producto['nombre']}** - Requiere: {producto['requerido']} {producto['unidad']}, "
+                                    f"Disponible: {producto['disponible']} (+{producto['sobra']} extra) - "
+                                    f"Categoría: {producto['categoria']}{caducidad_texto}{lote_texto}"
+                                )
+                        
+                        # Resumen por categorías médicas
+                        if evaluacion.get('productos_por_categoria'):
+                            st.markdown("---")
+                            st.markdown("#### ANÁLISIS POR CATEGORÍA MÉDICA:")
+                            
+                            for categoria, stats in evaluacion['productos_por_categoria'].items():
+                                porcentaje = (stats['disponibles'] / stats['total']) * 100 if stats['total'] > 0 else 0
+                                
+                                if porcentaje == 100:
+                                    st.success(f"**{categoria}**: {stats['disponibles']}/{stats['total']} productos ({porcentaje:.0f}%)")
+                                elif porcentaje >= 50:
+                                    st.warning(f"**{categoria}**: {stats['disponibles']}/{stats['total']} productos ({porcentaje:.0f}%)")
+                                else:
+                                    st.error(f"**{categoria}**: {stats['disponibles']}/{stats['total']} productos ({porcentaje:.0f}%)")
+                        
+                        # SECCIÓN: Documentos regulatorios médicos
+                        if evaluacion.get('documentos_requeridos'):
+                            st.markdown("---")
+                            st.markdown("#### DOCUMENTOS REGULATORIOS MÉDICOS:")
+                            
+                            total_docs = evaluacion.get('total_documentos', 0)
+                            docs_criticos = evaluacion.get('documentos_criticos_medicos', 0)
+                            
+                            if docs_criticos > 0:
+                                st.error(f"**{docs_criticos} documentos regulatorios CRÍTICOS** de {total_docs} totales")
+                            else:
+                                st.info(f"**Total de documentos requeridos: {total_docs}**")
+                            
+                            # Mostrar documentos agrupados por tipo médico
+                            docs_por_tipo = evaluacion.get('documentos_por_tipo', {})
+                            
+                            if docs_por_tipo:
+                                for tipo, documentos in docs_por_tipo.items():
+                                    # Emoji especializado por tipo médico
+                                    emoji_tipo = {
+                                        'Regulatorio Médico': '🏥',
+                                        'Calidad Médica': '🔬',
+                                        'Personal Especializado': '👨‍⚕️',
+                                        'Legal': '⚖️',
+                                        'Financiero': '💰',
+                                        'Propuesta': '📄',
+                                        'General': '📋'
+                                    }.get(tipo, '📄')
+                                    
+                                    # Determinar criticidad del tipo
+                                    es_critico = tipo in ['Regulatorio Médico', 'Calidad Médica', 'Personal Especializado']
+                                    
+                                    if es_critico:
+                                        st.markdown(f"**🚨 {emoji_tipo} {tipo} (CRÍTICO):**")
+                                    else:
+                                        st.markdown(f"**{emoji_tipo} {tipo}:**")
+                                    
+                                    for doc in documentos:
+                                        obligatorio_texto = "🔴 **OBLIGATORIO**" if doc['obligatorio'] else "🟡 *Opcional*"
+                                        sector_texto = f" - Sector: {doc.get('sector', 'N/A')}"
+                                        st.write(f"  • {doc['nombre']} - {obligatorio_texto}{sector_texto}")
+                                    
+                                    st.write("")
+                        
+                        elif requerimientos_df is not None:
+                            st.markdown("---")
+                            st.markdown("#### DOCUMENTOS REGULATORIOS:")
+                            st.info("ℹ️ No se encontraron requerimientos regulatorios específicos para esta licitación médica.")
+                            st.write("*Verifica que el nombre de la licitación coincida con el archivo de requerimientos.*")
+            
+            # Estadísticas globales médicas
+            st.subheader("Estadísticas Globales del Sector Médico")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Distribución por Estado:**")
+                chart_data = pd.DataFrame({
+                    'Estado': ['Aptas', 'Revisar', 'No Aptas', 'Críticas'],
+                    'Cantidad': [verdes, amarillos, rojos, criticos]
+                })
+                
+                for _, row in chart_data.iterrows():
+                    porcentaje = (row['Cantidad'] / total * 100) if total > 0 else 0
+                    st.write(f"{row['Estado']}: {row['Cantidad']} ({porcentaje:.1f}%)")
+            
+            with col2:
+                st.markdown("**Alertas de Caducidad:**")
+                if total_alertas_caducidad > 0:
+                    st.error(f"{total_alertas_caducidad} productos con alertas de caducidad")
+                    st.write("Revisar medicamentos próximos a caducar")
+                    st.write("Implementar rotación FEFO (First Expired, First Out)")
+                else:
+                    st.success("Sin alertas críticas de caducidad")
+            
+            # Descargar resultados médicos
+            csv_resultado = resultados_df.to_csv(index=False)
+            st.download_button(
+                label="Descargar Análisis Médico Completo (CSV)",
+                data=csv_resultado,
+                file_name=f"analisis_licitaciones_medicas_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+            
+        else:
+            st.error("No se pudieron procesar las licitaciones médicas. Verifica el formato de los archivos.")
+
+# Footer con información adicional para sector médico
+st.markdown("---")
+st.markdown("### Información Adicional para Licitaciones Médicas")
+
+with st.expander("Guía de Categorías Médicas Soportadas"):
+    st.markdown("""
+    **Categorías principales del sistema:**
+    
+    **Medicamentos:**
+    - Analgésicos (paracetamol, ibuprofeno, aspirina)
+    - Antibióticos (amoxicilina, cefalexina)
+    - Antihipertensivos (losartán, atenolol)
+    - Antidiabéticos (metformina, insulina)
+    - Y muchos más...
+    
+    **Material de Curación:**
+    - Gasas estériles y no estériles
+    - Vendas elásticas y de diferentes tamaños
+    - Antisépticos (alcohol, yodo, povidona)
+    - Suturas y material quirúrgico
+    
+    **Equipos Médicos:**
+    - Equipos de diagnóstico (estetoscopios, tensiómetros)
+    - Equipos de laboratorio (microscopios, centrífugas)
+    - Equipos de emergencia (desfibriladores, monitores)
+    
+    **Dispositivos Desechables:**
+    - Jeringas de diferentes tamaños
+    - Agujas hipodérmicas
+    - Catéteres y sondas
+    
+    **Equipo de Protección:**
+    - Guantes (látex, nitrilo)
+    - Mascarillas y cubrebocas
+    - Batas y equipos quirúrgicos
+    """)
+
+st.markdown("""
+**Sistema especializado para el análisis de licitaciones médicas y farmacéuticas**  
+*Versión optimizada para vocabulario médico, control de caducidades y gestión hospitalaria*
+""")
