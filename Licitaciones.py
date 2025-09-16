@@ -772,6 +772,166 @@ def evaluar_licitacion_medica_completa(fila, inventario_df, requerimientos_df=No
     resultado['observaciones'] = observaciones_detalladas
     return resultado
 
+def calcular_similitud_nombres(nombre1, nombre2):
+    """Calcula similitud entre nombres considerando términos médicos"""
+    if not nombre1 or not nombre2:
+        return 0
+    
+    palabras1 = set(nombre1.split())
+    palabras2 = set(nombre2.split())
+    
+    if not palabras1 or not palabras2:
+        return 0
+    
+    # Dar mayor peso a términos médicos específicos
+    terminos_medicos = {
+        'medicamentos', 'farmacia', 'hospital', 'clinica', 'salud',
+        'medico', 'quirurgico', 'laboratorio', 'reactivos'
+    }
+    
+    interseccion = len(palabras1.intersection(palabras2))
+    union = len(palabras1.union(palabras2))
+    
+    # Bonus por términos médicos comunes
+    terminos_medicos_comunes = palabras1.intersection(palabras2).intersection(terminos_medicos)
+    if terminos_medicos_comunes:
+        interseccion += len(terminos_medicos_comunes) * 0.5
+    
+    return interseccion / union if union > 0 else 0
+
+def clasificar_tipo_documento_medico(documento):
+    """Clasifica documentos considerando especificidades médicas"""
+    doc_lower = documento.lower()
+    
+    if any(x in doc_lower for x in ['sanitaria', 'sanitario', 'cofepris', 'invima', 'fda', 'registro medicamento']):
+        return 'Regulatorio Médico'
+    elif any(x in doc_lower for x in ['gmp', 'iso 13485', 'buenas practicas', 'farmacovigilancia']):
+        return 'Calidad Médica'
+    elif any(x in doc_lower for x in ['farmacobiologo', 'director tecnico', 'responsable sanitario']):
+        return 'Personal Especializado'
+    elif any(x in doc_lower for x in ['acta', 'cedula', 'rfc', 'poder']):
+        return 'Legal'
+    elif any(x in doc_lower for x in ['financiero', 'estados', 'declaracion']):
+        return 'Financiero'
+    elif any(x in doc_lower for x in ['propuesta', 'tecnica', 'economica']):
+        return 'Propuesta'
+    else:
+        return 'General'
+
+def determinar_obligatoriedad_medica(texto, documento):
+    """Determina obligatoriedad considerando regulaciones médicas"""
+    # Documentos críticos siempre obligatorios en sector salud
+    criticos_salud = [
+        'licencia sanitaria', 'registro sanitario', 'cofepris',
+        'buenas practicas', 'responsable sanitario'
+    ]
+    
+    if any(critico in documento for critico in criticos_salud):
+        return True
+    
+    # Evaluar contexto general
+    pos = texto.find(documento)
+    if pos == -1:
+        return True
+    
+    contexto = texto[max(0, pos-50):pos+len(documento)+50]
+    
+    palabras_obligatorio = ['obligatorio', 'requerido', 'indispensable', 'necesario', 'debe']
+    palabras_opcional = ['opcional', 'deseable', 'preferible', 'conveniente']
+    
+    if any(palabra in contexto for palabra in palabras_opcional):
+        return False
+    
+    return True
+
+def extraer_documentos_requeridos_medicos(fila):
+    """Extrae documentos requeridos específicos para licitaciones médicas"""
+    documentos = []
+    
+    columnas_documentos = [
+        'documentos', 'requerimientos', 'requisitos', 'archivos', 
+        'documentacion', 'docs', 'anexos', 'expediente'
+    ]
+    
+    texto_documentos = ""
+    for col in columnas_documentos:
+        if col in fila and pd.notna(fila[col]):
+            texto_documentos += str(fila[col]) + " "
+    
+    if not texto_documentos.strip():
+        return documentos
+    
+    texto_normalizado = normalizar_texto_completo(texto_documentos)
+    
+    # Documentos específicos para licitaciones médicas y farmacéuticas
+    documentos_medicos = [
+        # Documentos regulatorios médicos
+        'licencia sanitaria', 'permiso sanitario', 'aviso funcionamiento',
+        'registro sanitario', 'cofepris', 'invima', 'fda',
+        'buenas practicas manufactura', 'certificado gmp', 'iso 13485',
+        'farmacovigilancia', 'tecnovigilancia',
+        
+        # Documentos específicos de medicamentos
+        'registro medicamento', 'ficha tecnica', 'monografia',
+        'certificado analisis', 'certificado calidad',
+        'cadena custodia', 'cadena frio',
+        
+        # Personal especializado
+        'quimico farmacobiologo', 'director tecnico',
+        'responsable sanitario', 'profesional salud',
+        'cedula profesional',
+        
+        # Documentos generales básicos
+        'acta constitutiva', 'cedula rfc', 'poder notarial',
+        'estados financieros', 'declaracion anual',
+        'constancia situacion fiscal', 'opinion cumplimiento',
+        'propuesta tecnica', 'propuesta economica'
+    ]
+    
+    # Buscar documentos específicos médicos
+    for doc in documentos_medicos:
+        if doc in texto_normalizado:
+            doc_formateado = doc.replace('_', ' ').title()
+            if doc_formateado not in [d['nombre'] for d in documentos]:
+                documentos.append({
+                    'nombre': doc_formateado,
+                    'tipo': clasificar_tipo_documento_medico(doc),
+                    'obligatorio': determinar_obligatoriedad_medica(texto_normalizado, doc),
+                    'sector': 'Salud' if 'sanitaria' in doc or 'medico' in doc or 'farmaco' in doc else 'General'
+                })
+    
+    return documentos
+
+def obtener_requerimientos_documentales_medicos(nombre_licitacion, requerimientos_df):
+    """Obtiene los documentos requeridos para una licitación médica específica"""
+    if requerimientos_df is None or requerimientos_df.empty:
+        return []
+    
+    nombre_normalizado = normalizar_texto_completo(nombre_licitacion)
+    requerimientos_encontrados = []
+    
+    for _, fila in requerimientos_df.iterrows():
+        nombre_req = ""
+        for col in ['nombre', 'licitacion', 'proyecto', 'titulo']:
+            if col in fila and pd.notna(fila[col]):
+                nombre_req = str(fila[col])
+                break
+        
+        if not nombre_req:
+            continue
+        
+        nombre_req_normalizado = normalizar_texto_completo(nombre_req)
+        
+        if (nombre_normalizado in nombre_req_normalizado or 
+            nombre_req_normalizado in nombre_normalizado or
+            calcular_similitud_nombres(nombre_normalizado, nombre_req_normalizado) > 0.6):
+            
+            documentos = extraer_documentos_requeridos_medicos(fila)
+            if documentos:
+                requerimientos_encontrados.extend(documentos)
+    
+    return requerimientos_encontrados
+
 # INTERFAZ PRINCIPAL
 st.title("🏥 Sistema de Licitaciones Médicas")
 st.markdown("**Análisis especializado de licitaciones médicas vs inventario hospitalario**")
