@@ -892,6 +892,51 @@ if mostrar_debug:
                 else:
                     st.write(f"❌ {prod_name}: No encontrado en inventario")
 
+# Asegurar que todas las funciones estén disponibles antes del procesamiento
+def procesar_licitacion_completa(fila, inventario_df, requerimientos_df):
+    """Función wrapper para evaluar licitación completa"""
+    # Evaluación médica de productos
+    resultado = evaluar_licitacion_medica(fila, inventario_df)
+    
+    # Agregar evaluación de requerimientos documentales médicos
+    if requerimientos_df is not None and not requerimientos_df.empty:
+        nombre_licitacion = ""
+        for col in ['nombre', 'titulo', 'licitacion', 'descripcion']:
+            if col in fila and pd.notna(fila[col]):
+                nombre_licitacion = str(fila[col])
+                break
+        
+        if nombre_licitacion:
+            documentos_requeridos = obtener_requerimientos_documentales_medicos(nombre_licitacion, requerimientos_df)
+            resultado['documentos_requeridos'] = documentos_requeridos
+            resultado['total_documentos'] = len(documentos_requeridos)
+            
+            # Clasificar documentos por tipo médico
+            tipos_docs = {}
+            for doc in documentos_requeridos:
+                tipo = doc['tipo']
+                if tipo not in tipos_docs:
+                    tipos_docs[tipo] = []
+                tipos_docs[tipo].append(doc)
+            resultado['documentos_por_tipo'] = tipos_docs
+            
+            # Contar documentos críticos médicos
+            docs_criticos = sum(1 for doc in documentos_requeridos 
+                              if doc['tipo'] in ['Regulatorio Médico', 'Calidad Médica', 'Personal Especializado'])
+            resultado['documentos_criticos_medicos'] = docs_criticos
+        else:
+            resultado['documentos_requeridos'] = []
+            resultado['total_documentos'] = 0
+            resultado['documentos_por_tipo'] = {}
+            resultado['documentos_criticos_medicos'] = 0
+    else:
+        resultado['documentos_requeridos'] = []
+        resultado['total_documentos'] = 0
+        resultado['documentos_por_tipo'] = {}
+        resultado['documentos_criticos_medicos'] = 0
+    
+    return resultado
+
 # Procesamiento principal
 if st.button("Analizar Licitaciones Médicas", type="primary"):
     with st.spinner("Procesando análisis médico especializado..."):
@@ -900,7 +945,7 @@ if st.button("Analizar Licitaciones Médicas", type="primary"):
         alertas_criticas = []
         
         for idx, fila in licitaciones_df.iterrows():
-            evaluacion = evaluar_licitacion_medica_completa(fila, inventario_df, requerimientos_df)
+            evaluacion = procesar_licitacion_completa(fila, inventario_df, requerimientos_df)
             evaluaciones_detalladas.append(evaluacion)
             
             # Obtener nombre de licitación
