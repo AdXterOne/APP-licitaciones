@@ -778,20 +778,27 @@ def obtener_documentos_requeridos(licitacion_id, documentos_df):
         return []
 
     documentos = []
-    # Buscar por un ID único si la columna existe
-    if 'id' in documentos_df.columns:
-        docs = documentos_df[documentos_df['id'] == licitacion_id]
-        if not docs.empty:
-            for _, row in docs.iterrows():
-                documentos.append(row['documento'])
-    
-    # Si no se encontró por ID, buscar por nombre o descripción de la licitación
-    elif 'nombre' in documentos_df.columns:
+
+    # Verificar si la columna 'documentos' existe en el DataFrame
+    if 'documentos' not in documentos_df.columns:
+        st.error("❌ El archivo de documentos requeridos debe tener una columna llamada 'documentos'.")
+        return []
+
+    # Buscar por un ID único si la columna existe (asumiendo que es 'nombre' en tu caso)
+    # y que la columna de la licitación en el archivo de documentos es 'nombre'
+    if 'nombre' in documentos_df.columns:
+        # Normalizar el texto de búsqueda para una coincidencia flexible
         nombre_licitacion_normalizado = normalizar_texto(licitacion_id)
-        docs = documentos_df[documentos_df['nombre'].apply(lambda x: nombre_licitacion_normalizado in normalizar_texto(x))]
-        if not docs.empty:
-            for _, row in docs.iterrows():
-                documentos.append(row['documento'])
+        
+        # Filtrar el DataFrame donde el nombre de la licitación coincide
+        docs_encontrados = documentos_df[documentos_df['nombre'].apply(lambda x: nombre_licitacion_normalizado in normalizar_texto(x))]
+        
+        if not docs_encontrados.empty:
+            # Iterar sobre las filas encontradas
+            for _, row in docs_encontrados.iterrows():
+                # Dividir la cadena de documentos por comas y limpiar espacios
+                doc_list = [doc.strip() for doc in str(row['documentos']).split(',')]
+                documentos.extend(doc_list)
     
     return documentos
 
