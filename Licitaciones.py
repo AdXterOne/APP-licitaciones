@@ -772,7 +772,30 @@ def verificar_caducidad(fecha_str):
     except:
         return {'estado': 'error', 'dias_restantes': None, 'alerta': False}
 
-def evaluar_licitacion(fila, inventario_df):
+def obtener_documentos_requeridos(licitacion_id, documentos_df):
+    """Obtiene la lista de documentos requeridos para una licitación específica."""
+    if documentos_df is None or documentos_df.empty:
+        return []
+
+    documentos = []
+    # Buscar por un ID único si la columna existe
+    if 'id' in documentos_df.columns:
+        docs = documentos_df[documentos_df['id'] == licitacion_id]
+        if not docs.empty:
+            for _, row in docs.iterrows():
+                documentos.append(row['documento'])
+    
+    # Si no se encontró por ID, buscar por nombre o descripción de la licitación
+    elif 'nombre' in documentos_df.columns:
+        nombre_licitacion_normalizado = normalizar_texto(licitacion_id)
+        docs = documentos_df[documentos_df['nombre'].apply(lambda x: nombre_licitacion_normalizado in normalizar_texto(x))]
+        if not docs.empty:
+            for _, row in docs.iterrows():
+                documentos.append(row['documento'])
+    
+    return documentos
+
+def evaluar_licitacion(fila, inventario_df, documentos_df=None):
     """Evalúa una licitación completa"""
     resultado = {
         'estado': 'verde',
@@ -783,7 +806,8 @@ def evaluar_licitacion(fila, inventario_df):
         'productos_con_stock_insuficiente': [],
         'productos_disponibles': [],
         'alertas_caducidad': [],
-        'categorias_productos': {}
+        'categorias_productos': {},
+        'documentos_necesarios': []
     }
     
     # Obtener descripción de la licitación
@@ -800,6 +824,10 @@ def evaluar_licitacion(fila, inventario_df):
     # Extraer productos usando función médica especializada
     productos = extraer_productos_medicos(descripcion)
     
+    # Obtener documentos requeridos (nueva funcionalidad)
+    licitacion_id = fila.get('id', fila.get('nombre', ''))
+    resultado['documentos_necesarios'] = obtener_documentos_requeridos(licitacion_id, documentos_df)
+
     if not productos:
         resultado['estado'] = 'amarillo'
         resultado['observaciones'].append("No se identificaron productos médicos específicos")
@@ -914,6 +942,12 @@ with st.sidebar:
         help="Archivo con el inventario médico disponible"
     )
     
+    archivo_documentos = st.file_uploader(
+        "Archivo de Documentos Requeridos (Opcional)",
+        type=['csv', 'xlsx', 'xls'],
+        help="Archivo con la lista de documentos para cada licitación. Debe tener columnas 'id_licitacion' y 'documento'."
+    )
+    
     if archivo_licitaciones and archivo_inventario:
         st.success("✅ Archivos cargados correctamente")
     
@@ -925,7 +959,7 @@ with st.sidebar:
 
 # Verificar archivos
 if not archivo_licitaciones or not archivo_inventario:
-    st.info("👆 Por favor, carga ambos archivos para comenzar el análisis.")
+    st.info("👆 Por favor, carga los archivos de licitaciones e inventario para comenzar el análisis.")
     
     with st.expander("📖 Guía de uso"):
         st.markdown("""
@@ -938,6 +972,10 @@ if not archivo_licitaciones or not archivo_inventario:
         **Inventario:**
         - Debe contener: nombre/producto, stock/cantidad, lote, caducidad
         - Ejemplo: nombre="Paracetamol 500mg", stock=200, lote="L001", caducidad="2025-12-31"
+        
+        **Documentos Requeridos (Opcional):**
+        - Debe contener: id_licitacion/nombre, documento
+        - Ejemplo: id_licitacion=1, documento="Certificado de Buenas Prácticas de Manufactura"
         
         ### Productos médicos reconocidos:
         - **Medicamentos**: 200+ incluidos (antibióticos, analgésicos, antivirales, etc.)
@@ -962,9 +1000,19 @@ try:
     else:
         inventario_df = pd.read_excel(archivo_inventario)
     
+    # Cargar documentos (opcional)
+    documentos_df = None
+    if archivo_documentos:
+        if archivo_documentos.name.endswith('.csv'):
+            documentos_df = pd.read_csv(archivo_documentos)
+        else:
+            documentos_df = pd.read_excel(archivo_documentos)
+    
     # Limpiar datos
     licitaciones_df = licitaciones_df.dropna(how='all')
     inventario_df = inventario_df.dropna(how='all')
+    if documentos_df is not None:
+        documentos_df = documentos_df.dropna(how='all')
     
     st.success(f"📊 Datos cargados: {len(licitaciones_df)} licitaciones, {len(inventario_df)} productos en inventario")
     
@@ -1025,7 +1073,7 @@ if st.button("🔍 Analizar Licitaciones Médicas", type="primary"):
         evaluaciones_detalladas = []
         
         for idx, fila in licitaciones_df.iterrows():
-            evaluacion = evaluar_licitacion(fila, inventario_df)
+            evaluacion = evaluar_licitacion(fila, inventario_df, documentos_df)
             evaluaciones_detalladas.append(evaluacion)
             
             # Obtener nombre de licitación
@@ -1095,6 +1143,12 @@ if st.button("🔍 Analizar Licitaciones Médicas", type="primary"):
                     emoji = "🟢" if estado == "verde" else ("🟡" if estado == "amarillo" else "🔴")
                     
                     with st.expander(f"{emoji} Licitación {idx+1}: {nombre_lic}"):
+                        
+                        # Documentos Requeridos (Nuevo)
+                        if evaluacion['documentos_necesarios']:
+                            st.markdown("#### 📝 Documentos Requeridos:")
+                            st.markdown("<ul>" + "".join([f"<li>{doc}</li>" for doc in evaluacion['documentos_necesarios']]) + "</ul>", unsafe_allow_html=True)
+                            st.markdown("---")
                         
                         # Alertas de caducidad (prioritario)
                         if evaluacion['alertas_caducidad']:
@@ -1248,8 +1302,7 @@ with st.expander("🔧 Cómo Funciona el Sistema"):
     """)
 
 st.markdown("""
-**🏥 Sistema de Licitaciones Médicas v3.0**  
-*Desarrollado para análisis especializado del sector salud con reconocimiento expandido de productos farmacéuticos*
+**🏥 Sistema de Licitaciones Médicas v3.0** *Desarrollado para análisis especializado del sector salud con reconocimiento expandido de productos farmacéuticos*
 
 ---
 
@@ -1258,6 +1311,7 @@ st.markdown("""
 1. **Preparar archivos**:
    - Licitaciones: CSV/Excel con columnas 'nombre', 'descripcion'
    - Inventario: CSV/Excel con columnas 'nombre', 'stock', 'caducidad', 'lote'
+   - **Documentos Requeridos (Opcional)**: CSV/Excel con columnas 'id_licitacion' y 'documento'
 
 2. **Cargar archivos** usando los selectores en la barra lateral
 
